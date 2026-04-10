@@ -145,4 +145,4 @@ demogcode.py
 - La detección del fin de trayectoria depende de que el archivo G-code contenga la cadena `End cutting path` en las líneas de separación.
 - Asegúrate de que el área de trabajo del xArm sea suficiente para los movimientos escalados antes de ejecutar el dibujo.
 
-Visit the wiki for details in the examples
+Visit the [Wwiki](https://github.com/cadva02/Reporte_modulo/wiki) for details in the examples
