@@ -42,20 +42,20 @@ raíz_del_proyecto/
 ├── xarm/
 │   └── wrapper/        ← SDK de xArm
 └── ejemplos/
-    └── ...
-        └── robot_draw.py   ← este script
+    └── common
+        └── demogcode.py   ← este script
 ```
 
 ---
 
 ## Instalación
 
-1. Clona el repositorio del SDK de xArm y coloca este script dentro de su estructura de directorios, o agrega la ruta al SDK en `sys.path`.
+1. Clona el repositorio del SDK de xArm y coloca este script dentro de su estructura de directorios.
 2. Asegúrate de que el archivo G-code (`.ngc`) esté en el mismo directorio que el script.
 
 ```bash
 git clone https://github.com/xArm-Developer/xArm-Python-SDK.git
-# Copia el script en la ubicación correcta dentro del SDK, o ajusta sys.path
+# Copia el script en la ubicación correcta dentro del SDK
 ```
 
 ---
@@ -67,7 +67,7 @@ git clone https://github.com/xArm-Developer/xArm-Python-SDK.git
 3. Ejecuta el script:
 
 ```bash
-python3 robot_draw.py
+python3 demogcode.py
 ```
 
 4. Sigue las instrucciones interactivas en la consola:
@@ -124,7 +124,7 @@ Inicio
 ## Estructura del código
 
 ```
-robot_draw.py
+demogcode.py
 ├── Configuración de conexión al xArm
 ├── Movimiento a posición inicial
 ├── Calibración interactiva de altura
@@ -142,8 +142,5 @@ robot_draw.py
 
 ## Notas y limitaciones
 
-- El script fue desarrollado y probado con el modelo de archivo `spidermannew_0001.ngc`. Otros archivos G-code deben seguir el mismo formato de coordenadas `X±NNN.NNN Y±NNN.NNN`.
 - La detección del fin de trayectoria depende de que el archivo G-code contenga la cadena `End cutting path` en las líneas de separación.
-- La lógica de altura Z está adaptada para una superficie ligeramente irregular; ajusta los valores de `target_z` según tu configuración física.
-- El script es interactivo y no admite ejecución desatendida (requiere entrada del usuario en varios puntos).
 - Asegúrate de que el área de trabajo del xArm sea suficiente para los movimientos escalados antes de ejecutar el dibujo.
