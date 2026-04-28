@@ -4,6 +4,7 @@ from configparser import ConfigParser
 from pathlib import Path
 import sys
 from typing import Callable
+import math 
 
 from PyQt5 import QtCore, QtGui, QtWidgets
 
@@ -17,54 +18,13 @@ except ImportError:
 
 
 ROBOT_HOME = (417.2, 176.0, 200.2, -176, -15.1, 14.02)
-ROBOT_WORK = (417.2, 176.0, 126.75, -176, -15.1, 14.02)
+ROBOT_WORK = (309.2, -34.5, 88.9, -179.9, -1.2, 8.6)
 ROBOT_STEP_MM = 10.0
 
-
-class LienzoFigura(QtWidgets.QWidget):
-    def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
-        super().__init__(parent)
-        self._figura: str | None = None
-        self.setStyleSheet("background-color: white;")
-
-    def set_figura(self, figura: str) -> None:
-        self._figura = figura
-        self.update()
-
-    def paintEvent(self, event: QtGui.QPaintEvent) -> None:
-        super().paintEvent(event)
-        if self._figura is None:
-            return
-
-        painter = QtGui.QPainter(self)
-        painter.setRenderHint(QtGui.QPainter.Antialiasing)
-        painter.setPen(QtGui.QPen(QtGui.QColor("#2c3e50"), 4))
-        painter.setBrush(QtGui.QBrush(QtGui.QColor("#c9d6df")))
-
-        ancho = self.width()
-        alto = self.height()
-
-        if self._figura == "cuadrado":
-            lado = min(ancho, alto) // 3
-            x = (ancho - lado) // 2
-            y = (alto - lado) // 2
-            painter.drawRect(x, y, lado, lado)
-        elif self._figura == "circulo":
-            diametro = min(ancho, alto) // 3
-            x = (ancho - diametro) // 2
-            y = (alto - diametro) // 2
-            painter.drawEllipse(x, y, diametro, diametro)
-        elif self._figura == "triangulo":
-            base = min(ancho, alto) // 2
-            centro_x = ancho // 2
-            centro_y = alto // 2
-            altura = int(base * 0.866)
-            puntos = [
-                QtCore.QPointF(centro_x, centro_y - altura // 2),
-                QtCore.QPointF(centro_x - base // 2, centro_y + altura // 2),
-                QtCore.QPointF(centro_x + base // 2, centro_y + altura // 2),
-            ]
-            painter.drawPolygon(QtGui.QPolygonF(puntos))
+# Dimensiones de las figuras en mm (convertidas de cm)
+CUADRADO_LADO = 50  # 15 cm
+CIRCULO_DIAMETRO = 50  # 10 cm (radio = 50)
+TRIANGULO_LADO = 50  # 10 cm
 
 
 class VentanaControl(QtWidgets.QMainWindow):
@@ -85,10 +45,6 @@ class VentanaControl(QtWidgets.QMainWindow):
         self._hold_delay.setSingleShot(True)
         self._hold_delay.setInterval(300)
         self._hold_delay.timeout.connect(self._iniciar_repeticion)
-
-        self.lienzo = LienzoFigura(self.ui.frame)
-        self.lienzo.setGeometry(0, 0, self.ui.frame.width(), self.ui.frame.height())
-        self.lienzo.show()
 
         self._crear_indicadores()
         self.arm = self._conectar_robot(ip_robot)
@@ -123,9 +79,9 @@ class VentanaControl(QtWidgets.QMainWindow):
         self.ui.B_abaj.released.connect(self._detener_movimiento_continuo)
         self.ui.B_Izq.released.connect(self._detener_movimiento_continuo)
 
-        self.ui.TrianguloButton.clicked.connect(lambda: self.lienzo.set_figura("triangulo"))
-        self.ui.CuadradoButton.clicked.connect(lambda: self.lienzo.set_figura("cuadrado"))
-        self.ui.CirculoButton.clicked.connect(lambda: self.lienzo.set_figura("circulo"))
+        self.ui.TrianguloButton.clicked.connect(self._dibujar_triangulo)
+        self.ui.CuadradoButton.clicked.connect(self._dibujar_cuadrado)
+        self.ui.CirculoButton.clicked.connect(self._dibujar_circulo)
 
     def _iniciar_movimiento_continuo(
         self, nombre: str, accion: Callable[[Posicion], Posicion]
@@ -223,6 +179,95 @@ class VentanaControl(QtWidgets.QMainWindow):
     def _actualizar_vista(self) -> None:
         self.lbl_posicion.setText(f"Posicion: ({self.posicion.x}, {self.posicion.y})")
 
+    def _dibujar_cuadrado(self) -> None:
+        """Dibuja un cuadrado de 15x15 cm iniciando desde ROBOT_WORK"""
+        if self.arm is None:
+            self._actualizar_estado_robot("modo local")
+            return
+
+        try:
+            self._actualizar_estado_robot("dibujando cuadrado...")
+            # Volver a posición de trabajo (0, 0)
+            x0, y0, z0, roll0, pitch0, yaw0 = ROBOT_WORK
+            self.arm.set_position(x=x0, y=y0, z=z0, roll=roll0, pitch=pitch0, yaw=yaw0, speed=20, wait=True)
+
+            # Puntos del cuadrado (0,0), (150,0), (150,150), (0,150), (0,0)
+            puntos = [
+                (x0, y0),
+                (x0 + CUADRADO_LADO, y0),
+                (x0 + CUADRADO_LADO, y0 + CUADRADO_LADO),
+                (x0, y0 + CUADRADO_LADO),
+                (x0, y0),
+            ]
+
+            for x, y in puntos:
+                self.arm.set_position(x=x, y=y, z=z0, roll=roll0, pitch=pitch0, yaw=yaw0, speed=20, wait=True)
+
+            self._robot_pose = [x0, y0, z0, roll0, pitch0, yaw0]
+            self._actualizar_estado_robot("cuadrado dibujado")
+        except Exception as exc:
+            self._actualizar_estado_robot(f"error: {exc}")
+
+    def _dibujar_circulo(self) -> None:
+        """Dibuja un círculo de 10 cm de diámetro iniciando desde ROBOT_WORK"""
+        if self.arm is None:
+            self._actualizar_estado_robot("modo local")
+            return
+
+        try:
+            self._actualizar_estado_robot("dibujando círculo...")
+            x0, y0, z0, roll0, pitch0, yaw0 = ROBOT_WORK
+            self.arm.set_position(x=x0, y=y0, z=z0, roll=roll0, pitch=pitch0, yaw=yaw0, speed=20, wait=True)
+
+            # Generar puntos del círculo (radio = 50 mm)
+            radio = CIRCULO_DIAMETRO / 2
+            pasos = 60  # 10 grados por paso
+            puntos = []
+            for i in range(pasos + 1):
+                angulo = (i * 360 / pasos) * math.pi / 180
+                x = x0 + radio * math.cos(angulo)
+                y = y0 + radio * math.sin(angulo)
+                puntos.append((x, y))
+
+            for x, y in puntos:
+                self.arm.set_position(x=x, y=y, z=z0, roll=roll0, pitch=pitch0, yaw=yaw0, speed=20, wait=True)
+
+            self._robot_pose = [x0, y0, z0, roll0, pitch0, yaw0]
+            self._actualizar_estado_robot("círculo dibujado")
+        except Exception as exc:
+            self._actualizar_estado_robot(f"error: {exc}")
+
+    def _dibujar_triangulo(self) -> None:
+        """Dibuja un triángulo equilátero de 10 cm de lado iniciando desde ROBOT_WORK"""
+        if self.arm is None:
+            self._actualizar_estado_robot("modo local")
+            return
+
+        try:
+            self._actualizar_estado_robot("dibujando triángulo...")
+            x0, y0, z0, roll0, pitch0, yaw0 = ROBOT_WORK
+            self.arm.set_position(x=x0, y=y0, z=z0, roll=roll0, pitch=pitch0, yaw=yaw0, speed=20, wait=True)
+
+            # Triángulo equilátero: altura = lado * sqrt(3)/2
+            lado = TRIANGULO_LADO
+            altura = lado * math.sqrt(3) / 2
+
+            # Puntos del triángulo equilátero con vértice de inicio en ROBOT_WORK
+            puntos = [
+                (x0, y0),  # vértice superior (inicio)
+                (x0 + lado / 2, y0 - altura / 2),  # vértice abajo derecha
+                (x0 - lado / 2, y0 - altura / 2),  # vértice abajo izquierda
+                (x0, y0),  # regresa al vértice inicial
+            ]
+
+            for x, y in puntos:
+                self.arm.set_position(x=x, y=y, z=z0, roll=roll0, pitch=pitch0, yaw=yaw0, speed=20, wait=True)
+
+            self._robot_pose = [x0, y0, z0, roll0, pitch0, yaw0]
+            self._actualizar_estado_robot("triángulo dibujado")
+        except Exception as exc:
+            self._actualizar_estado_robot(f"error: {exc}")
+
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
         if self.arm is not None:
             try:
@@ -234,24 +279,7 @@ class VentanaControl(QtWidgets.QMainWindow):
 
 
 def _solicitar_ip_robot() -> str:
-    if len(sys.argv) >= 2 and sys.argv[1].strip():
-        return sys.argv[1].strip()
-
-    ruta_config = Path(__file__).resolve().parents[2] / "robot.conf"
-    if ruta_config.exists():
-        parser = ConfigParser()
-        parser.read(ruta_config)
-        if parser.has_option("xArm", "ip"):
-            ip_guardada = parser.get("xArm", "ip").strip()
-            if ip_guardada:
-                respuesta = input(f"IP del robot [{ip_guardada}]: ").strip()
-                return respuesta or ip_guardada
-
-    while True:
-        ip = input("Ingrese la IP del robot xArm: ").strip()
-        if ip:
-            return ip
-        print("La IP no puede estar vacia.")
+    return "172.23.254.182"
 
 
 def main() -> None:
