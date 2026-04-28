@@ -4,7 +4,10 @@ from configparser import ConfigParser
 from pathlib import Path
 import sys
 from typing import Callable
-import math 
+import math
+import subprocess
+from pathlib import Path
+import os
 
 from PyQt5 import QtCore, QtGui, QtWidgets
 
@@ -16,9 +19,9 @@ try:
 except ImportError:
     XArmAPI = None
 
-
-ROBOT_HOME = (417.2, 176.0, 200.2, -176, -15.1, 14.02)
-ROBOT_WORK = (309.2, -34.5, 88.9, -179.9, -1.2, 8.6)
+os.environ["QT_QPA_PLATFORMTHEME"] = "xdgdesktopportal"
+ROBOT_HOME = (118.8, 2.30, 163.7, -175.6, -2.6, -56)
+ROBOT_WORK = (255.4, 10.2, 85.6, 179.9, 5.5, -117.4)
 ROBOT_STEP_MM = 10.0
 
 # Dimensiones de las figuras en mm (convertidas de cm)
@@ -82,6 +85,8 @@ class VentanaControl(QtWidgets.QMainWindow):
         self.ui.TrianguloButton.clicked.connect(self._dibujar_triangulo)
         self.ui.CuadradoButton.clicked.connect(self._dibujar_cuadrado)
         self.ui.CirculoButton.clicked.connect(self._dibujar_circulo)
+        
+        self.ui.SubirButton.clicked.connect(self._seleccionar_archivo)
 
     def _iniciar_movimiento_continuo(
         self, nombre: str, accion: Callable[[Posicion], Posicion]
@@ -178,6 +183,26 @@ class VentanaControl(QtWidgets.QMainWindow):
 
     def _actualizar_vista(self) -> None:
         self.lbl_posicion.setText(f"Posicion: ({self.posicion.x}, {self.posicion.y})")
+
+    def _seleccionar_archivo(self) -> None:
+        """Abre un diálogo de selección de archivos nativo del OS"""
+        
+        # Forzar a Qt a intentar usar el tema del sistema (opcional pero recomendado)
+        # Esto se puede poner al inicio del programa
+        # os.environ["QT_QPA_PLATFORMTHEME"] = "gtk3" # o "kde"
+
+        # getOpenFileName usa por defecto el diálogo nativo a menos que 
+        # se le pase la opción QFileDialog.DontUseNativeDialog
+        archivo, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self,
+            "Seleccionar archivo NGC",
+            str(Path.home()),
+            "Archivos NGC (*.ngc);;Todos los archivos (*)"
+        )
+
+        if archivo:
+            nombre_archivo = Path(archivo).name
+            self.ui.archivo_texto.setText(nombre_archivo)
 
     def _dibujar_cuadrado(self) -> None:
         """Dibuja un cuadrado de 15x15 cm iniciando desde ROBOT_WORK"""
