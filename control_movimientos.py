@@ -8,11 +8,13 @@ import math
 import subprocess
 from pathlib import Path
 import os
+import re
 
 from PyQt5 import QtCore, QtGui, QtWidgets
 
 from Lite6 import Ui_MainWindow
 from movimientos import Abajo, Arriba, Derecha, Izquierda, Posicion
+from vision_detection import VisionDetectionController
 
 try:
     from xarm.wrapper import XArmAPI
@@ -20,8 +22,8 @@ except ImportError:
     XArmAPI = None
 
 os.environ["QT_QPA_PLATFORMTHEME"] = "xdgdesktopportal"
-ROBOT_HOME = (118.8, 2.30, 163.7, -175.6, -2.6, -56)
-ROBOT_WORK = (255.4, 10.2, 85.6, 179.9, 5.5, -117.4)
+ROBOT_HOME = (281.7, 0.80, 121.8, 171.0, 6.7, 125.9)
+ROBOT_WORK = (303.2, -17, 87.5, 174.4, 1.2, 88.3)
 ROBOT_STEP_MM = 10.0
 
 # Dimensiones de las figuras en mm (convertidas de cm)
@@ -37,9 +39,11 @@ class VentanaControl(QtWidgets.QMainWindow):
         self.ui.setupUi(self)
 
         self.posicion = Posicion(0, 0)
-        self._robot_pose = list(ROBOT_WORK)
+        self._robot_pose = list(ROBOT_HOME)
         self.arm = None
+        self._archivo_ngc: str | None = None
         self._movimiento_activo: tuple[str, Callable[[Posicion], Posicion]] | None = None
+        self._vision_controller: VisionDetectionController | None = None
         self._hold_timer = QtCore.QTimer(self)
         self._hold_timer.setInterval(100)
         self._hold_timer.timeout.connect(self._ejecutar_continuo)
@@ -50,6 +54,7 @@ class VentanaControl(QtWidgets.QMainWindow):
         self._hold_delay.timeout.connect(self._iniciar_repeticion)
 
         self._crear_indicadores()
+        self._crear_vista_camara()
         self.arm = self._conectar_robot(ip_robot)
         self._conectar_botones()
         self._actualizar_vista()
@@ -62,6 +67,13 @@ class VentanaControl(QtWidgets.QMainWindow):
         self.lbl_robot = QtWidgets.QLabel("Robot: desconectado", self.ui.centralwidget)
         self.lbl_robot.setGeometry(30, 250, 380, 24)
         self.lbl_robot.setStyleSheet("color: white; font-weight: bold;")
+
+    def _crear_vista_camara(self) -> None:
+        self.camera_label = QtWidgets.QLabel(self.ui.frame)
+        self.camera_label.setGeometry(0, 0, self.ui.frame.width(), self.ui.frame.height())
+        self.camera_label.setAlignment(QtCore.Qt.AlignCenter)
+        self.camera_label.setStyleSheet("background-color: #000; color: white;")
+        self.camera_label.setText("Camara apagada")
 
     def _conectar_botones(self) -> None:
         self.ui.B_arriba.pressed.connect(
@@ -85,8 +97,25 @@ class VentanaControl(QtWidgets.QMainWindow):
         self.ui.TrianguloButton.clicked.connect(self._dibujar_triangulo)
         self.ui.CuadradoButton.clicked.connect(self._dibujar_cuadrado)
         self.ui.CirculoButton.clicked.connect(self._dibujar_circulo)
-        
+
         self.ui.SubirButton.clicked.connect(self._seleccionar_archivo)
+        self.ui.DibujarButton_2.clicked.connect(self._dibujar_archivo_ngc)
+        self.ui.pushButton_2.clicked.connect(self._activar_auto)
+        self.ui.pushButton.clicked.connect(self._desactivar_manual)
+
+    def _activar_auto(self) -> None:
+        if self._vision_controller is None:
+            self._vision_controller = VisionDetectionController(
+                self.camera_label,
+                status_callback=self._actualizar_estado_robot,
+                parent=self,
+            )
+
+        self._vision_controller.start()
+
+    def _desactivar_manual(self) -> None:
+        if self._vision_controller is not None:
+            self._vision_controller.stop()
 
     def _iniciar_movimiento_continuo(
         self, nombre: str, accion: Callable[[Posicion], Posicion]
@@ -131,20 +160,21 @@ class VentanaControl(QtWidgets.QMainWindow):
 
     def _conectar_robot(self, ip: str):
         if XArmAPI is None:
-            raise RuntimeError("xArm API no disponible")
+            self._actualizar_estado_robot("modo local: xArm API no disponible")
+            return None
 
         try:
             arm = XArmAPI(ip)
             arm.motion_enable(enable=True)
             arm.set_mode(0)
             arm.set_state(state=0)
-            arm.move_gohome(wait=True)
-            arm.set_position(*ROBOT_WORK, speed=20, wait=True)
-            self._robot_pose = list(ROBOT_WORK)
+            arm.set_position(*ROBOT_HOME, speed=20, wait=True)
+            self._robot_pose = list(ROBOT_HOME)
             self._actualizar_estado_robot(f"conectado: {ip}")
             return arm
         except Exception as exc:
-            raise RuntimeError(f"no fue posible conectar al robot: {exc}") from exc
+            self._actualizar_estado_robot(f"modo local: {exc}")
+            return None
 
     def _actualizar_estado_robot(self, texto: str) -> None:
         if hasattr(self, "lbl_robot"):
@@ -186,13 +216,6 @@ class VentanaControl(QtWidgets.QMainWindow):
 
     def _seleccionar_archivo(self) -> None:
         """Abre un diálogo de selección de archivos nativo del OS"""
-        
-        # Forzar a Qt a intentar usar el tema del sistema (opcional pero recomendado)
-        # Esto se puede poner al inicio del programa
-        # os.environ["QT_QPA_PLATFORMTHEME"] = "gtk3" # o "kde"
-
-        # getOpenFileName usa por defecto el diálogo nativo a menos que 
-        # se le pase la opción QFileDialog.DontUseNativeDialog
         archivo, _ = QtWidgets.QFileDialog.getOpenFileName(
             self,
             "Seleccionar archivo NGC",
@@ -201,8 +224,93 @@ class VentanaControl(QtWidgets.QMainWindow):
         )
 
         if archivo:
+            self._archivo_ngc = archivo
             nombre_archivo = Path(archivo).name
             self.ui.archivo_texto.setText(nombre_archivo)
+            self._actualizar_estado_robot(f"archivo cargado: {nombre_archivo}")
+
+    def _dibujar_archivo_ngc(self) -> None:
+        """Dibuja la trayectoria del archivo NGC seleccionado"""
+        if self._archivo_ngc is None:
+            self._actualizar_estado_robot("error: no hay archivo seleccionado")
+            return
+
+        if self.arm is None:
+            self._actualizar_estado_robot("modo local")
+            return
+
+        try:
+            self._actualizar_estado_robot("dibujando archivo...")
+            x0, y0, z0, roll0, pitch0, yaw0 = ROBOT_WORK
+            self.arm.set_position(x=x0, y=y0, z=z0, roll=roll0, pitch=pitch0, yaw=yaw0, speed=20, wait=True)
+            
+            # Leer el archivo NGC y extraer las coordenadas X, Y
+            lineas_procesadas = 0
+            try:
+                with open(self._archivo_ngc, 'r') as gcode:
+                    origen_archivo = None  # punto inicial del archivo NGC
+                    for line in gcode:
+                        line = line.strip()
+                        # Extraer coordenadas X, Y del formato "X123.45 Y67.89"
+                        coord = re.findall(r'[XY]-?\d+\.?\d*', line)
+                        if coord:
+                            xx = None
+                            yy = None
+
+                            for c in coord:
+                                if c.startswith('X'):
+                                    xx = float(c[1:])
+                                elif c.startswith('Y'):
+                                    yy = float(c[1:])
+
+                            if xx is not None and yy is not None:
+                                if origen_archivo is None:
+                                    # El primer punto del archivo se alinea con ROBOT_WORK
+                                    origen_archivo = (xx, yy)
+                                    target_x = x0
+                                    target_y = y0
+                                else:
+                                    # Mover relativo al primer punto del archivo
+                                    dx = xx - origen_archivo[0]
+                                    dy = yy - origen_archivo[1]
+                                    target_x = x0 + dx
+                                    target_y = y0 + dy
+
+                                # Ejecutar movimiento manteniendo Z y orientación de ROBOT_WORK
+                                self.arm.set_position(
+                                    x=target_x,
+                                    y=target_y,
+                                    z=z0,
+                                    roll=roll0,
+                                    pitch=pitch0,
+                                    yaw=yaw0,
+                                    speed=100,
+                                    wait=True,
+                                )
+                                self._robot_pose = [target_x, target_y, z0, roll0, pitch0, yaw0]
+                                lineas_procesadas += 1
+
+                self._actualizar_estado_robot(f"archivo dibujado: {lineas_procesadas} puntos")
+                # Volver a la posición de trabajo al terminar
+                try:
+                    if self.arm is not None:
+                        self.arm.set_position(*ROBOT_WORK, speed=20, wait=True)
+                        self._robot_pose = list(ROBOT_WORK)
+                        # Limpiar selección de archivo para permitir cargar uno nuevo
+                        self._archivo_ngc = None
+                        try:
+                            self.ui.archivo_texto.setText("")
+                        except Exception:
+                            pass
+                        self._actualizar_estado_robot("regresado a ROBOT_WORK")
+                except Exception as exc:
+                    self._actualizar_estado_robot(f"error al regresar a ROBOT_WORK: {exc}")
+            except FileNotFoundError:
+                self._actualizar_estado_robot(f"error: archivo no encontrado")
+            except Exception as exc:
+                self._actualizar_estado_robot(f"error leyendo archivo: {exc}")
+        except Exception as exc:
+            self._actualizar_estado_robot(f"error: {exc}")
 
     def _dibujar_cuadrado(self) -> None:
         """Dibuja un cuadrado de 15x15 cm iniciando desde ROBOT_WORK"""
@@ -294,9 +402,11 @@ class VentanaControl(QtWidgets.QMainWindow):
             self._actualizar_estado_robot(f"error: {exc}")
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
+        if self._vision_controller is not None:
+            self._vision_controller.close()
         if self.arm is not None:
             try:
-                self.arm.move_gohome(wait=True)
+                self.arm.set_position(*ROBOT_HOME, speed=20, wait=True)
                 self.arm.disconnect()
             except Exception:
                 pass
