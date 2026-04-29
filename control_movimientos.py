@@ -4,15 +4,14 @@ from configparser import ConfigParser
 from pathlib import Path
 import sys
 from typing import Callable
-import math
 import subprocess
-from pathlib import Path
 import os
-import re
 
 from PyQt5 import QtCore, QtGui, QtWidgets
 
 from Lite6 import Ui_MainWindow
+from dibujar_figuras import dibujar_circulo, dibujar_cuadrado, dibujar_triangulo
+from dibujar_ngc import dibujar_archivo_ngc
 from movimientos import Abajo, Arriba, Derecha, Izquierda, Posicion
 from vision_detection import VisionDetectionController
 
@@ -25,11 +24,6 @@ os.environ["QT_QPA_PLATFORMTHEME"] = "xdgdesktopportal"
 ROBOT_HOME = (281.7, 0.80, 121.8, 171.0, 6.7, 125.9)
 ROBOT_WORK = (303.2, -17, 87.5, 174.4, 1.2, 88.3)
 ROBOT_STEP_MM = 10.0
-
-# Dimensiones de las figuras en mm (convertidas de cm)
-CUADRADO_LADO = 50  # 15 cm
-CIRCULO_DIAMETRO = 50  # 10 cm (radio = 50)
-TRIANGULO_LADO = 50  # 10 cm
 
 
 class VentanaControl(QtWidgets.QMainWindow):
@@ -230,176 +224,16 @@ class VentanaControl(QtWidgets.QMainWindow):
             self._actualizar_estado_robot(f"archivo cargado: {nombre_archivo}")
 
     def _dibujar_archivo_ngc(self) -> None:
-        """Dibuja la trayectoria del archivo NGC seleccionado"""
-        if self._archivo_ngc is None:
-            self._actualizar_estado_robot("error: no hay archivo seleccionado")
-            return
-
-        if self.arm is None:
-            self._actualizar_estado_robot("modo local")
-            return
-
-        try:
-            self._actualizar_estado_robot("dibujando archivo...")
-            x0, y0, z0, roll0, pitch0, yaw0 = ROBOT_WORK
-            self.arm.set_position(x=x0, y=y0, z=z0, roll=roll0, pitch=pitch0, yaw=yaw0, speed=20, wait=True)
-            
-            # Leer el archivo NGC y extraer las coordenadas X, Y
-            lineas_procesadas = 0
-            try:
-                with open(self._archivo_ngc, 'r') as gcode:
-                    origen_archivo = None  # punto inicial del archivo NGC
-                    for line in gcode:
-                        line = line.strip()
-                        # Extraer coordenadas X, Y del formato "X123.45 Y67.89"
-                        coord = re.findall(r'[XY]-?\d+\.?\d*', line)
-                        if coord:
-                            xx = None
-                            yy = None
-
-                            for c in coord:
-                                if c.startswith('X'):
-                                    xx = float(c[1:])
-                                elif c.startswith('Y'):
-                                    yy = float(c[1:])
-
-                            if xx is not None and yy is not None:
-                                if origen_archivo is None:
-                                    # El primer punto del archivo se alinea con ROBOT_WORK
-                                    origen_archivo = (xx, yy)
-                                    target_x = x0
-                                    target_y = y0
-                                else:
-                                    # Mover relativo al primer punto del archivo
-                                    dx = xx - origen_archivo[0]
-                                    dy = yy - origen_archivo[1]
-                                    target_x = x0 + dx
-                                    target_y = y0 + dy
-
-                                # Ejecutar movimiento manteniendo Z y orientación de ROBOT_WORK
-                                self.arm.set_position(
-                                    x=target_x,
-                                    y=target_y,
-                                    z=z0,
-                                    roll=roll0,
-                                    pitch=pitch0,
-                                    yaw=yaw0,
-                                    speed=100,
-                                    wait=True,
-                                )
-                                self._robot_pose = [target_x, target_y, z0, roll0, pitch0, yaw0]
-                                lineas_procesadas += 1
-
-                self._actualizar_estado_robot(f"archivo dibujado: {lineas_procesadas} puntos")
-                # Volver a la posición de trabajo al terminar
-                try:
-                    if self.arm is not None:
-                        self.arm.set_position(*ROBOT_WORK, speed=20, wait=True)
-                        self._robot_pose = list(ROBOT_WORK)
-                        # Limpiar selección de archivo para permitir cargar uno nuevo
-                        self._archivo_ngc = None
-                        try:
-                            self.ui.archivo_texto.setText("")
-                        except Exception:
-                            pass
-                        self._actualizar_estado_robot("regresado a ROBOT_WORK")
-                except Exception as exc:
-                    self._actualizar_estado_robot(f"error al regresar a ROBOT_WORK: {exc}")
-            except FileNotFoundError:
-                self._actualizar_estado_robot(f"error: archivo no encontrado")
-            except Exception as exc:
-                self._actualizar_estado_robot(f"error leyendo archivo: {exc}")
-        except Exception as exc:
-            self._actualizar_estado_robot(f"error: {exc}")
+        dibujar_archivo_ngc(self, ROBOT_WORK)
 
     def _dibujar_cuadrado(self) -> None:
-        """Dibuja un cuadrado de 15x15 cm iniciando desde ROBOT_WORK"""
-        if self.arm is None:
-            self._actualizar_estado_robot("modo local")
-            return
-
-        try:
-            self._actualizar_estado_robot("dibujando cuadrado...")
-            # Volver a posición de trabajo (0, 0)
-            x0, y0, z0, roll0, pitch0, yaw0 = ROBOT_WORK
-            self.arm.set_position(x=x0, y=y0, z=z0, roll=roll0, pitch=pitch0, yaw=yaw0, speed=20, wait=True)
-
-            # Puntos del cuadrado (0,0), (150,0), (150,150), (0,150), (0,0)
-            puntos = [
-                (x0, y0),
-                (x0 + CUADRADO_LADO, y0),
-                (x0 + CUADRADO_LADO, y0 + CUADRADO_LADO),
-                (x0, y0 + CUADRADO_LADO),
-                (x0, y0),
-            ]
-
-            for x, y in puntos:
-                self.arm.set_position(x=x, y=y, z=z0, roll=roll0, pitch=pitch0, yaw=yaw0, speed=20, wait=True)
-
-            self._robot_pose = [x0, y0, z0, roll0, pitch0, yaw0]
-            self._actualizar_estado_robot("cuadrado dibujado")
-        except Exception as exc:
-            self._actualizar_estado_robot(f"error: {exc}")
+        dibujar_cuadrado(self, ROBOT_WORK, 50)
 
     def _dibujar_circulo(self) -> None:
-        """Dibuja un círculo de 10 cm de diámetro iniciando desde ROBOT_WORK"""
-        if self.arm is None:
-            self._actualizar_estado_robot("modo local")
-            return
-
-        try:
-            self._actualizar_estado_robot("dibujando círculo...")
-            x0, y0, z0, roll0, pitch0, yaw0 = ROBOT_WORK
-            self.arm.set_position(x=x0, y=y0, z=z0, roll=roll0, pitch=pitch0, yaw=yaw0, speed=20, wait=True)
-
-            # Generar puntos del círculo (radio = 50 mm)
-            radio = CIRCULO_DIAMETRO / 2
-            pasos = 60  # 10 grados por paso
-            puntos = []
-            for i in range(pasos + 1):
-                angulo = (i * 360 / pasos) * math.pi / 180
-                x = x0 + radio * math.cos(angulo)
-                y = y0 + radio * math.sin(angulo)
-                puntos.append((x, y))
-
-            for x, y in puntos:
-                self.arm.set_position(x=x, y=y, z=z0, roll=roll0, pitch=pitch0, yaw=yaw0, speed=20, wait=True)
-
-            self._robot_pose = [x0, y0, z0, roll0, pitch0, yaw0]
-            self._actualizar_estado_robot("círculo dibujado")
-        except Exception as exc:
-            self._actualizar_estado_robot(f"error: {exc}")
+        dibujar_circulo(self, ROBOT_WORK, 50)
 
     def _dibujar_triangulo(self) -> None:
-        """Dibuja un triángulo equilátero de 10 cm de lado iniciando desde ROBOT_WORK"""
-        if self.arm is None:
-            self._actualizar_estado_robot("modo local")
-            return
-
-        try:
-            self._actualizar_estado_robot("dibujando triángulo...")
-            x0, y0, z0, roll0, pitch0, yaw0 = ROBOT_WORK
-            self.arm.set_position(x=x0, y=y0, z=z0, roll=roll0, pitch=pitch0, yaw=yaw0, speed=20, wait=True)
-
-            # Triángulo equilátero: altura = lado * sqrt(3)/2
-            lado = TRIANGULO_LADO
-            altura = lado * math.sqrt(3) / 2
-
-            # Puntos del triángulo equilátero con vértice de inicio en ROBOT_WORK
-            puntos = [
-                (x0, y0),  # vértice superior (inicio)
-                (x0 + lado / 2, y0 - altura / 2),  # vértice abajo derecha
-                (x0 - lado / 2, y0 - altura / 2),  # vértice abajo izquierda
-                (x0, y0),  # regresa al vértice inicial
-            ]
-
-            for x, y in puntos:
-                self.arm.set_position(x=x, y=y, z=z0, roll=roll0, pitch=pitch0, yaw=yaw0, speed=20, wait=True)
-
-            self._robot_pose = [x0, y0, z0, roll0, pitch0, yaw0]
-            self._actualizar_estado_robot("triángulo dibujado")
-        except Exception as exc:
-            self._actualizar_estado_robot(f"error: {exc}")
+        dibujar_triangulo(self, ROBOT_WORK, 50)
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
         if self._vision_controller is not None:
