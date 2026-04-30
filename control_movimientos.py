@@ -65,7 +65,7 @@ class VentanaControl(QtWidgets.QMainWindow):
     def _crear_vista_camara(self) -> None:
         self.camera_label = QtWidgets.QLabel(self.ui.frame)
         self.camera_label.setGeometry(0, 0, self.ui.frame.width(), self.ui.frame.height())
-        self.camera_label.setAlignment(QtCore.Qt.AlignCenter)
+        #self.camera_label.setAlignment(QtCore.Qt.AlignCenter)
         self.camera_label.setStyleSheet("background-color: #000; color: white;")
         self.camera_label.setText("Camara apagada")
 
@@ -102,14 +102,34 @@ class VentanaControl(QtWidgets.QMainWindow):
             self._vision_controller = VisionDetectionController(
                 self.camera_label,
                 status_callback=self._actualizar_estado_robot,
+                completion_callback=self._on_detection_complete,
                 parent=self,
             )
 
+        self._vision_controller.reset_detection()
         self._vision_controller.start()
 
     def _desactivar_manual(self) -> None:
         if self._vision_controller is not None:
             self._vision_controller.stop()
+
+    def _on_detection_complete(self, positions: dict[str, tuple[float, float]]) -> None:
+        order = ['triangle', 'square', 'circle']
+        for shape in order:
+            if shape in positions:
+                grid_x, grid_y = positions[shape]
+                robot_x = ROBOT_WORK[0] + grid_x * ROBOT_STEP_MM
+                robot_y = ROBOT_WORK[1] + grid_y * ROBOT_STEP_MM
+                self._mover_a_posicion_absoluta(robot_x, robot_y)
+                self.posicion = Posicion(int(grid_x), int(grid_y))
+                self._actualizar_vista()
+                message = (
+                    f"Figura completada: {shape} -> "
+                    f"Grid: ({int(grid_x)}, {int(grid_y)}) "
+                    f"Mm: ({robot_x:.1f}, {robot_y:.1f})"
+                )
+                print(message)
+                self._actualizar_estado_robot(message)
 
     def _iniciar_movimiento_continuo(
         self, nombre: str, accion: Callable[[Posicion], Posicion]
@@ -202,6 +222,28 @@ class VentanaControl(QtWidgets.QMainWindow):
             )
             self._robot_pose = [x, y, z, roll, pitch, yaw]
             self._actualizar_estado_robot("moviendo")
+        except Exception as exc:
+            self._actualizar_estado_robot(f"error: {exc}")
+
+    def _mover_a_posicion_absoluta(self, x: float, y: float) -> None:
+        if self.arm is None:
+            self._actualizar_estado_robot("modo local")
+            return
+
+        _, _, z, roll, pitch, yaw = self._robot_pose
+        try:
+            self.arm.set_position(
+                x=x,
+                y=y,
+                z=z,
+                roll=roll,
+                pitch=pitch,
+                yaw=yaw,
+                speed=20,
+                wait=True,
+            )
+            self._robot_pose = [x, y, z, roll, pitch, yaw]
+            self._actualizar_estado_robot("moviendo a posicion")
         except Exception as exc:
             self._actualizar_estado_robot(f"error: {exc}")
 
